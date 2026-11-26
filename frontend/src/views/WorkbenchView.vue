@@ -28,6 +28,11 @@
       </span>
     </p>
 
+    <div v-if="returnContext" class="notice-card return-banner" data-testid="measure-return-banner">
+      <strong>正在为绑定 {{ returnContext.entryId }} 选择引用度量</strong>
+      <span>在下方任一度量选择「选用为引用度量」，选择后会返回发起编辑的那份绑定。</span>
+    </div>
+
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
         <span>{{ field }}</span>
@@ -59,6 +64,23 @@
               @click="runAction(action, row)"
             >
               {{ action }}
+            </button>
+            <RouterLink
+              v-if="isMetricBind"
+              class="link"
+              :to="{ name: 'binding_detail', params: { entryId: String(row.id) } }"
+              :data-testid="`open-binding-${row.id}`"
+            >
+              打开绑定
+            </RouterLink>
+            <button
+              v-if="returnContext"
+              class="link"
+              type="button"
+              :data-testid="`select-measure-${row.id}`"
+              @click="selectMeasure(row)"
+            >
+              选用为引用度量
             </button>
           </td>
         </tr>
@@ -94,11 +116,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import {
   createEntry,
   downloadEntries,
+  getBindingByCode,
   listEntries,
   moduleMeta,
   runAction as applyAction,
@@ -106,25 +130,59 @@ import {
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
-const meta = moduleMeta(props.moduleKey)
+const route = useRoute()
+const router = useRouter()
+const meta = computed(() => moduleMeta(props.moduleKey))
+const isMetricBind = computed(() => meta.value.key === 'metric_bind')
 const rows = ref<EntryRow[]>([])
 const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
-const filterFields = meta.fields.slice(0, 3)
+const filterFields = computed(() => meta.value.fields.slice(0, 3))
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const returnContext = computed(() => {
+  const returnTo = String(route.query.returnTo ?? '')
+  if (meta.value.key !== 'measure_catalog' || !returnTo) return null
+  return {
+    entryId: returnTo,
+    session: String(route.query.session ?? ''),
+    bindingCode: String(route.query.bindingCode ?? ''),
+    bindingName: String(route.query.bindingName ?? ''),
+  }
+})
+
+function selectMeasure(row: EntryRow) {
+  const ctx = returnContext.value
+  if (!ctx) return
+  // 用 replace 返回发起编辑的绑定：浏览器后退时直接落回那份绑定，
+  // 而不是再退回度量目录。
+  router.replace({
+    name: 'binding_detail',
+    params: { entryId: ctx.entryId },
+    query: {
+      session: ctx.session,
+      measureRef: String(row['度量编号'] ?? ''),
+      measureId: String(row.id),
+      measureName: String(row['度量名称'] ?? ''),
+      measureExpression: String(row['计算表达式'] ?? ''),
+      measureStatus: String(row.status ?? ''),
+      measureRevision: String(row.revision ?? 1),
+      from: 'measure_catalog',
+    },
+  })
+}
 const stats = computed(() => [
-  { label: meta.metrics[0], value: total.value },
-  { label: meta.metrics[1], value: rows.value.filter((row) => row.status === meta.statuses[1]).length },
+  { label: meta.value.metrics[0], value: total.value },
+  { label: meta.value.metrics[1], value: rows.value.filter((row) => row.status === meta.value.statuses[1]).length },
   {
-    label: meta.metrics[2],
-    value: rows.value.filter((row) => row.status === meta.statuses[meta.statuses.length - 1]).length,
+    label: meta.value.metrics[2],
+    value: rows.value.filter((row) => row.status === meta.value.statuses[meta.value.statuses.length - 1]).length,
   },
 ])
 const statusSummary = computed(() =>
-  meta.statuses.map((status) => ({
+  meta.value.statuses.map((status) => ({
     status,
     count: rows.value.filter((row) => String(row.status) === status).length,
   })),
@@ -138,14 +196,14 @@ function resetFilters() {
 async function exportRows() {
   errorMessage.value = ''
   try {
-    await downloadEntries(meta.key, filters.value)
+    await downloadEntries(meta.value.key, filters.value)
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '导出失败'
   }
 }
 
 function openCreate() {
-  createValues.value = Object.fromEntries(meta.fields.map((field) => [field, '']))
+  createValues.value = Object.fromEntries(meta.value.fields.map((field) => [field, '']))
   errorMessage.value = ''
   showCreate.value = true
 }
@@ -154,7 +212,7 @@ async function submitCreate() {
   creating.value = true
   errorMessage.value = ''
   try {
-    const result = await createEntry(meta.key, createValues.value)
+    const result = await createEntry(meta.value.key, createValues.value)
     if (!result.ok) throw new Error(result.message)
     showCreate.value = false
     await reload()
@@ -168,7 +226,7 @@ async function submitCreate() {
 async function runAction(action: string, row: EntryRow) {
   errorMessage.value = ''
   try {
-    const result = await applyAction(meta.key, Number(row.id), action)
+    const result = await applyAction(meta.value.key, Number(row.id), action)
     if (!result.ok) throw new Error(result.message)
     await reload()
   } catch (error) {
@@ -179,7 +237,7 @@ async function runAction(action: string, row: EntryRow) {
 async function reload() {
   errorMessage.value = ''
   try {
-    const payload = await listEntries(meta.key, filters.value)
+    const payload = await listEntries(meta.value.key, filters.value)
     rows.value = payload.items
     total.value = payload.total
   } catch (error) {
@@ -187,5 +245,66 @@ async function reload() {
   }
 }
 
-onMounted(reload)
+/**
+ * 老书签可能带 `?bind=BND-002` 或 `?keyword=BND-002` 直接指向某份绑定。
+ * 列表本身仍可正常使用；若能解析出唯一绑定，再跳到对应的新路由。
+ */
+async function resolveLegacyBindingLink() {
+  if (!isMetricBind.value) {
+    await reload()
+    return
+  }
+  const legacyCode = String(route.query.bind ?? route.query.bindingCode ?? '').trim()
+  if (legacyCode) {
+    errorMessage.value = ''
+    try {
+      const row = await getBindingByCode(legacyCode)
+      const id = Number(row.id ?? 0)
+      if (id) {
+        await router.replace({ name: 'binding_detail', params: { entryId: String(id) } })
+        return
+      }
+    } catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '绑定编号解析失败'
+      return
+    }
+  }
+  // 只带绑定编号的模糊检索：命中唯一一条时同样直接打开，命中多条时留在列表让值班挑选。
+  const keyword = String(route.query.keyword ?? '').trim()
+  if (keyword) {
+    filters.value = { ...filters.value, 绑定编号: keyword }
+    await reload()
+    if (rows.value.length === 1) {
+      const only = rows.value[0]
+      await router.replace({ name: 'binding_detail', params: { entryId: String(only.id) } })
+    }
+    return
+  }
+  await reload()
+}
+
+const ready = ref(false)
+onMounted(async () => {
+  await resolveLegacyBindingLink()
+  ready.value = true
+})
+
+// 模块切换时重新载入（同一组件实例会被 vue-router 复用）。
+watch(
+  () => props.moduleKey,
+  () => {
+    filters.value = {}
+    showCreate.value = false
+    void resolveLegacyBindingLink()
+  },
+)
+
+watch(
+  () => route.query,
+  async () => {
+    if (!ready.value) return
+    await resolveLegacyBindingLink()
+  },
+)
+
 </script>

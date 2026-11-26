@@ -41,5 +41,32 @@ class MeasureCatalogService(BaseModuleService):
                 r["计算表达式"] = new_expression
                 r["status"] = "已修订"
                 r["目录版本"] = f"v{int(r.get('id', 1)) + 1}"
+                r["revision"] = int(r.get("revision") or 1) + 1
                 return True, f"度量 {measure_id} 已修订"
         return False, f"度量 {measure_id} 不存在"
+
+    def update_fields(
+        self,
+        entry_id: int,
+        values: dict[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """修改度量字段：版本号单调递增，供绑定页判断所选度量是否仍可用。"""
+        row = store.find(self.MODULE, entry_id)
+        if row is None:
+            return None, "度量不存在或已归档"
+        current = int(row.get("revision") or 1)
+        if expected_revision is not None and int(expected_revision) != current:
+            return None, "度量已被他人修改，请重新载入后再提交"
+        for field in self.LIST_FIELDS:
+            if field in values and str(values[field] or "").strip():
+                row[field] = str(values[field]).strip()
+        row["revision"] = current + 1
+        return row, None
+
+    def find_by_code(self, measure_id: str) -> dict[str, Any] | None:
+        for row in store.rows(self.MODULE):
+            if row.get("度量编号") == measure_id:
+                return row
+        return None

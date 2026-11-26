@@ -59,3 +59,88 @@ export async function loadOverview(): Promise<OverviewResult> {
   if (!response.ok) throw new Error('运营概览读取失败')
   return await response.json()
 }
+
+// ---------- 指标绑定直连与并发编辑 ----------
+
+export type BindingEditResult = {
+  ok: boolean
+  message: string
+  entry: EntryRow | null
+  conflict: {
+    type: string
+    message: string
+    canKeepMeasure: boolean
+    mustReconfirm: boolean
+    binding: Record<string, unknown> | null
+    measure: Record<string, unknown> | null
+  } | null
+}
+
+export async function getBindingContext(entryId: number): Promise<Record<string, unknown>> {
+  const response = await request(`/api/metric_bind/${entryId}/context`)
+  if (response.status === 404) throw new Error(`绑定 ${entryId} 不存在或已归档`)
+  if (!response.ok) throw new Error('绑定上下文读取失败')
+  return await response.json()
+}
+
+export async function getBindingByCode(bindCode: string): Promise<Record<string, unknown>> {
+  const response = await request(`/api/metric_bind/by-code/${encodeURIComponent(bindCode)}`)
+  if (response.status === 404) throw new Error(`绑定编号 ${bindCode} 不存在或已归档`)
+  if (!response.ok) throw new Error('绑定编号解析失败')
+  return await response.json()
+}
+
+export async function applyBindingMeasure(
+  entryId: number,
+  payload: {
+    measureRef: string
+    values: Record<string, string>
+    expectedBindingRevision: number
+    expectedMeasureRevision: number | null
+  },
+): Promise<BindingEditResult> {
+  const response = await request(`/api/metric_bind/${entryId}/edit`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  if (!response.ok) throw new Error('绑定修改提交失败')
+  return await response.json()
+}
+
+export async function updateBindingFields(
+  entryId: number,
+  values: Record<string, string>,
+  expectedRevision?: number,
+): Promise<BindingEditResult> {
+  const response = await request(`/api/metric_bind/${entryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ values, expectedRevision: expectedRevision ?? null }),
+  })
+  if (!response.ok) throw new Error('绑定更新失败')
+  return await response.json()
+}
+
+export async function duplicateBinding(entryId: number): Promise<BindingEditResult> {
+  const response = await request(`/api/metric_bind/${entryId}/duplicate`, { method: 'POST' })
+  if (!response.ok) throw new Error('复制绑定失败')
+  return await response.json()
+}
+
+export async function restoreBinding(entryId: number): Promise<BindingEditResult> {
+  const response = await request(`/api/metric_bind/${entryId}/restore`, { method: 'POST' })
+  if (!response.ok) throw new Error('重新启用绑定失败')
+  return await response.json()
+}
+
+export async function updateMeasureFields(
+  entryId: number,
+  values: Record<string, string>,
+  expectedRevision?: number,
+): Promise<BindingEditResult> {
+  const response = await request(`/api/measure_catalog/${entryId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ values, expectedRevision: expectedRevision ?? null }),
+  })
+  if (!response.ok) throw new Error('度量更新失败')
+  return await response.json()
+}

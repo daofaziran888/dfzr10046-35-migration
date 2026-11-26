@@ -11,6 +11,8 @@
 .
 ├── frontend/                 Vue 3 + Vite + TypeScript 前端
 │   ├── src/views/WorkbenchView.vue|tsx  全部模块共享工作台
+│   ├── src/views/BindingDetailView.vue  指标绑定直连工作台
+│   ├── src/domain/metricBind.ts         绑定编辑会话与冲突分型
 │   ├── src/data/modules.ts              18个业务模块配置
 │   ├── src/api/              统一请求封装
 │   └── vite.config.ts        dev server 配置（open: false）
@@ -80,6 +82,39 @@ npm run dev
   `frontend/src/domain/<模块>.ts`，用于承载真实业务差异并维持36题位容量。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+
+## 指标绑定：直连路由与并发编辑
+
+指标绑定的存量入口 `/metric_bind` 仍然打开列表工作台，团队的旧书签、收藏链接
+（包括 `/metric_bind?bind=BND-002`、`/metric_bind?keyword=BND-002` 和
+`/metric_bind/BND-002`）都会解析回同一份绑定。新链接 `/metric_bind/<绑定 id>`
+可直接打开指定绑定的工作台，两个入口共存，分批部署与回退期间都能进入原工作台。
+
+- `GET /api/metric_bind/{id}/context`：绑定归属、引用度量快照、可编辑性与后续动作。
+  绑定已失效（已替换/已解除）时仍返回归属，并给出复制为新绑定、重新启用、
+  查看引用度量、回到列表等可执行动作。
+- `GET /api/metric_bind/by-code/{绑定编号}`：老书签只带编号时兜底解析。
+- `POST /api/metric_bind/{id}/edit`：绑定页从度量目录选完度量后提交，同时核对
+  绑定与度量两份 `revision`。
+- `PATCH /api/metric_bind/{id}`、`PATCH /api/measure_catalog/{id}`：带版本号的
+  字段更新，用于并发演示与正常编辑。
+
+提交冲突按两个维度分型，回包里的 `canKeepMeasure` 与 `mustReconfirm` 就是
+“能否沿用当前所选度量”“是否须重新取得编辑确认”：
+
+| 冲突类型 | 触发条件 | 能否沿用所选度量 | 是否须重新确认 |
+| --- | --- | --- | --- |
+| `binding_changed` | 仅绑定被他人修改 | 可以 | 必须 |
+| `measure_changed` | 仅所选度量被他人修改 | 不能 | 不必 |
+| `binding_and_measure_changed` | 两者都被修改 | 不能 | 必须 |
+| `binding_invalid` / `measure_missing` | 绑定失效、度量不存在 | 不能 | 不必 |
+
+前端编辑草稿按“编辑会话”存放（`frontend/src/domain/metricBind.ts`），会话标识写在
+地址栏 `session` 参数里，同一编号的两个页面各持一份草稿、互不覆盖；从度量目录
+选完度量后用 `replace` 返回发起编辑的那份绑定，后退、刷新与旧入口回退都能找回
+同一对象与草稿。绑定被改的冲突可“沿用所选度量并重新确认”，度量被改的冲突则须
+重新选择度量，只有版本对齐后才允许提交。
+
 
 领域：数据工程
 子方向：数仓与数据湖
